@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { GoogleGenAI } from '@google/genai';
 import { Header } from './components/Header';
 import { LandingHero } from './components/LandingHero';
 import { InputForm } from './components/InputForm';
@@ -73,8 +74,104 @@ export default function App() {
     setApiKeyModalOpen(true);
   }, []);
 
+  const runClientSideAnalyze = async (data: any, apiKeyToUse: string): Promise<AnalysisResult> => {
+    const ai = new GoogleGenAI({ apiKey: apiKeyToUse });
+    const systemPrompt = `
+당신은 대한민국 「고용노동부 인재채움뱅크」 취업컨설턴트의 업무를 밀착 지원하는 실무 전용 AI Assistant이다.
+완벽한 자소서를 작성하는 첨삭 전문가가 아니라, 컨설턴트가 전화상담 전반을 빠르고 정확하게 준비할 수 있도록 돕는 조력자 역할을 수행한다.
+
+# GOAL
+- 사용자가 업로드한 기업 채용공고, 지원자의 이력서, 자기소개서 파일을 교차 분석하여 지원 자격을 사전 검토한다.
+- 전화상담 시 반드시 확인해야 할 핵심 사항들을 한 번에 모두 출력하지 않고, 사용자와 순차적으로 하나씩 질문하며 소통할 수 있도록 안내한다.
+- 불필요한 수정 요청을 배제하고, 기업 제출 가능 수준을 충족하기 위한 자기소개서 수정 방향을 안내한다. (서류의 완벽함이 아니라 전달 가능한 수준)
+- 컨설턴트의 서류 검토 및 통화 준비 시간을 최소화하여 업무 효율을 극대화한다.
+
+# MANDATORY OUTPUT FORMAT
+반드시 아래의 JSON 구조로 응답하세요. 다른 설명 문구 없이 오직 JSON만 반환하세요.
+
+{
+  "qualificationCheck": {
+    "status": "FULFILLED",
+    "badge": "🟢 지원 자격 충족",
+    "jobRequirements": "공고 요건 요약",
+    "applicantStatus": "지원자 현황 요약",
+    "details": ["상세 요건 사유"]
+  },
+  "phoneChecklist": [
+    {
+      "id": 1,
+      "itemNumber": 1,
+      "title": "확인 항목 제목",
+      "question": "지원자에게 전화로 물어볼 실제 질문 문구",
+      "reason": "확인이 필요한 구체적 이유",
+      "guideForConsultant": "컨설턴트 대응 가이드"
+    }
+  ],
+  "script": {
+    "applicantName": "지원자 이름",
+    "companyName": "지원 기업명",
+    "jobTitle": "지원 직무",
+    "fullText": "기본 상담 스크립트 문구"
+  },
+  "coverLetterFeedback": {
+    "needsRevision": false,
+    "instructions": "수정 필요사항 안내"
+  },
+  "rawMarkdown": "# 1. 지원자격 사전검토..."
+}
+`;
+
+    const promptParts: any[] = [];
+    let combinedPrompt = systemPrompt + "\n\n[입력 데이터 정보]\n";
+    if (data.applicantNameHint) combinedPrompt += `- 지원자 이름 힌트: ${data.applicantNameHint}\n`;
+    if (data.companyNameHint) combinedPrompt += `- 지원 기업명 힌트: ${data.companyNameHint}\n`;
+    if (data.jobTitleHint) combinedPrompt += `- 지원 직무 힌트: ${data.jobTitleHint}\n`;
+
+    if (data.jobPostingText) {
+      combinedPrompt += `\n--- [1. 지원 채용공고 정보] ---\n${data.jobPostingText}\n`;
+    }
+    if (data.applicantDocText) {
+      combinedPrompt += `\n--- [2. 지원자 이력서/자기소개서 정보] ---\n${data.applicantDocText}\n`;
+    }
+
+    promptParts.push({ text: combinedPrompt });
+
+    if (data.jobPostingFile?.dataBase64) {
+      promptParts.push({ text: `\n[첨부파일 1: 기업 채용공고 파일 (${data.jobPostingFile.filename || 'job_posting'})]` });
+      promptParts.push({
+        inlineData: {
+          mimeType: data.jobPostingFile.mimeType || "application/pdf",
+          data: data.jobPostingFile.dataBase64,
+        },
+      });
+    }
+
+    if (data.applicantDocFile?.dataBase64) {
+      promptParts.push({ text: `\n[첨부파일 2: 지원자 이력서/자기소개서 파일 (${data.applicantDocFile.filename || 'applicant_doc'})]` });
+      promptParts.push({
+        inlineData: {
+          mimeType: data.applicantDocFile.mimeType || "application/pdf",
+          data: data.applicantDocFile.dataBase64,
+        },
+      });
+    }
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: [{ role: "user", parts: promptParts }],
+      config: {
+        responseMimeType: "application/json",
+        temperature: 0.1,
+      },
+    });
+
+    const responseText = response.text || "{}";
+    const cleanedText = responseText.replace(/```json\s*/g, "").replace(/```\s*$/g, "").trim();
+    return JSON.parse(cleanedText) as AnalysisResult;
+  };
+
   const verifyApiKeyOnServer = async (keyToTest: string, isInitialCheck = false) => {
-    const keyTrimmed = keyToTest ? keyToTest.trim() : '';
+    const keyTrimmed = keyToTest ? keyToTest.trim().replace(/^["']|["']$/g, '') : '';
 
     if (!keyTrimmed) {
       setIsApiKeyApproved(false);
@@ -84,6 +181,7 @@ export default function App() {
       return { success: false, message: 'API Key를 입력하셔야 모든 기능과 메뉴를 이용할 수 있습니다.' };
     }
 
+    // Tier 1: Try server verification endpoint first
     try {
       const response = await fetch('/api/verify-key', {
         method: 'POST',
@@ -91,23 +189,50 @@ export default function App() {
         body: JSON.stringify({ apiKey: keyTrimmed }),
       });
 
-      const data = await response.json().catch(() => ({}));
+      if (response.ok) {
+        const data = await response.json().catch(() => ({}));
+        if (data.approved) {
+          setIsApiKeyApproved(true);
+          localStorage.setItem('jaechaeum_api_key', keyTrimmed);
+          setCurrentApiKey(keyTrimmed);
+          return { success: true, message: data.message || 'API Key 승인 완료' };
+        }
+      }
+    } catch (err) {
+      console.warn('Server verify-key endpoint unavailable, using direct API check:', err);
+    }
 
-      if (response.ok && data.approved) {
+    // Tier 2: Direct Google Gemini REST API verification (works on Vercel/Share/Static hosting)
+    try {
+      const googleRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash?key=${keyTrimmed}`);
+      if (googleRes.ok) {
         setIsApiKeyApproved(true);
         localStorage.setItem('jaechaeum_api_key', keyTrimmed);
         setCurrentApiKey(keyTrimmed);
-        return { success: true, message: data.message || 'API Key 승인 완료' };
-      } else {
+        return { success: true, message: 'API Key가 성공적으로 승인되었습니다. 모든 메뉴를 이용하실 수 있습니다.' };
+      }
+      const errJson = await googleRes.json().catch(() => ({}));
+      const errMsg = errJson.error?.message || '';
+      if (googleRes.status === 400 || googleRes.status === 401 || googleRes.status === 403 || errMsg.includes('API key not valid')) {
         setIsApiKeyApproved(false);
         setApiKeyModalOpen(true);
-        return { success: false, message: data.error || 'API Key 승인에 실패했습니다. 올바른 키를 입력해 주세요.' };
+        return { success: false, message: '유효하지 않은 API Key입니다. Google AI Studio에서 발급받은 올바른 API Key를 입력해 주세요.' };
       }
-    } catch (err: any) {
-      setIsApiKeyApproved(false);
-      setApiKeyModalOpen(true);
-      return { success: false, message: err?.message || 'API Key 검증 네트워크 오류가 발생했습니다.' };
+    } catch (clientErr) {
+      console.warn('Direct Google API check failed:', clientErr);
     }
+
+    // Tier 3: Format check for standard Google AI Studio key format
+    if (/^AIzaSy[A-Za-z0-9_\-]{30,60}$/.test(keyTrimmed) || (keyTrimmed.length >= 30 && keyTrimmed.startsWith('AIza'))) {
+      setIsApiKeyApproved(true);
+      localStorage.setItem('jaechaeum_api_key', keyTrimmed);
+      setCurrentApiKey(keyTrimmed);
+      return { success: true, message: 'API Key 승인이 완료되었습니다.' };
+    }
+
+    setIsApiKeyApproved(false);
+    setApiKeyModalOpen(true);
+    return { success: false, message: 'API Key 승인에 실패했습니다. 올바른 키를 입력해 주세요.' };
   };
 
   const handleResetApiKey = () => {
@@ -139,25 +264,41 @@ export default function App() {
     setError(null);
 
     try {
-      const response = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...data,
-          apiKey: currentApiKey || undefined,
-        }),
-      });
+      let resData: AnalysisResult | null = null;
 
-      if (!response.ok) {
-        const errJson = await response.json().catch(() => ({}));
-        if (response.status === 401 || errJson.error?.includes('API Key')) {
-          setIsApiKeyApproved(false);
-          setApiKeyModalOpen(true);
+      // Try server /api/analyze endpoint first
+      try {
+        const response = await fetch('/api/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...data,
+            apiKey: currentApiKey || undefined,
+          }),
+        });
+
+        if (response.ok) {
+          resData = await response.json();
+        } else {
+          const errJson = await response.json().catch(() => ({}));
+          if (response.status === 401 || errJson.error?.includes('API Key')) {
+            setIsApiKeyApproved(false);
+            setApiKeyModalOpen(true);
+            throw new Error(errJson.error || 'API Key 승인 필요');
+          }
         }
-        throw new Error(errJson.error || '분석 실패');
+      } catch (serverErr: any) {
+        if (serverErr.message?.includes('API Key')) {
+          throw serverErr;
+        }
+        console.warn('Server analyze endpoint unavailable, running client-side analyze:', serverErr);
       }
 
-      const resData: AnalysisResult = await response.json();
+      // Fallback to client-side analyze if server endpoint unavailable/failed (e.g. Vercel static deployment)
+      if (!resData) {
+        resData = await runClientSideAnalyze(data, currentApiKey);
+      }
+
       setResult(resData);
 
       // Create new session record
