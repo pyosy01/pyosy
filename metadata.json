@@ -1,0 +1,6 @@
+{
+  "name": "인재채움뱅크 취업컨설턴트 AI Assistant",
+  "description": "고용노동부 인재채움뱅크 취업컨설턴트를 위한 실무 전용 AI Assistant - 채용공고, 이력서, 자기소개서 교차 분석 및 전화상담 밀착 지원 대시보드",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
