@@ -14,7 +14,9 @@ app.use(express.json({ limit: "20mb" }));
 
 // Initialize Gemini client lazily or on API call
 function getGeminiClient(customApiKey?: string) {
-  const apiKey = typeof customApiKey === 'string' ? customApiKey.trim() : '';
+  const apiKey = (typeof customApiKey === 'string' && customApiKey.trim())
+    ? customApiKey.trim().replace(/^["']|["']$/g, '')
+    : (process.env.GEMINI_API_KEY || process.env.API_KEY || '');
   if (!apiKey) {
     throw new Error("Gemini API Key가 입력되지 않았거나 승인받지 못했습니다. API Key를 직접 입력해 주세요.");
   }
@@ -32,7 +34,7 @@ function getGeminiClient(customApiKey?: string) {
 app.post("/api/verify-key", async (req, res) => {
   try {
     const { apiKey } = req.body || {};
-    const keyToUse = typeof apiKey === 'string' ? apiKey.trim() : '';
+    const keyToUse = typeof apiKey === 'string' ? apiKey.trim().replace(/^["']|["']$/g, '') : '';
 
     if (!keyToUse) {
       return res.status(400).json({
@@ -43,10 +45,17 @@ app.post("/api/verify-key", async (req, res) => {
 
     const ai = getGeminiClient(keyToUse);
 
-    // Call a minimal request to verify key approval
-    const candidateModels = ["gemini-3.6-flash", "gemini-flash-latest"];
+    // Standard Gemini models supported by Google AI Studio user keys
+    const candidateModels = [
+      "gemini-2.5-flash",
+      "gemini-2.0-flash",
+      "gemini-1.5-flash",
+      "gemini-2.5-pro",
+      "gemini-3.6-flash",
+      "gemini-flash-latest",
+    ];
     let verified = false;
-    let lastErr = null;
+    let lastErr: any = null;
 
     for (const modelName of candidateModels) {
       try {
@@ -58,7 +67,8 @@ app.post("/api/verify-key", async (req, res) => {
           verified = true;
           break;
         }
-      } catch (err) {
+      } catch (err: any) {
+        console.warn(`Verify key with model ${modelName} failed:`, err?.message || err);
         lastErr = err;
       }
     }
@@ -217,7 +227,14 @@ app.post("/api/analyze", async (req, res) => {
       });
     }
 
-    const candidateModels = ["gemini-3.6-flash", "gemini-flash-latest"];
+    const candidateModels = [
+      "gemini-2.5-flash",
+      "gemini-2.0-flash",
+      "gemini-1.5-flash",
+      "gemini-2.5-pro",
+      "gemini-3.6-flash",
+      "gemini-flash-latest",
+    ];
     let responseText = "";
     let lastModelError: any = null;
 
